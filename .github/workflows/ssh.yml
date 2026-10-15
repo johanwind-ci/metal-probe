@@ -1,0 +1,54 @@
+name: ssh
+# Manual-only: SSH into a GitHub-hosted runner through a bore.pub TCP tunnel.
+#   gh workflow run ssh.yml -f pubkey="$(cat key.pub)" -f port=4xxxx
+#   ssh -p 4xxxx runner@bore.pub
+# Key-only auth for the one key passed in; the session ends after `minutes` or when /tmp/stop exists.
+on:
+  workflow_dispatch:
+    inputs:
+      pubkey:
+        description: "SSH public key allowed to log in"
+        required: true
+        type: string
+      port:
+        description: "Remote port on bore.pub (pick a random free one, 1024-65535)"
+        required: true
+        type: string
+      minutes:
+        description: "Max session length in minutes"
+        default: "30"
+        type: string
+      runner:
+        description: "runs-on label"
+        default: "macos-latest"
+        type: string
+
+jobs:
+  ssh:
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - name: Start sshd (key auth only)
+        env:
+          PUBKEY: ${{ inputs.pubkey }}
+        run: |
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$PUBKEY" > ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys
+          printf 'PasswordAuthentication no\nKbdInteractiveAuthentication no\nPermitRootLogin no\nAllowUsers %s\n' "$USER" | sudo tee /etc/ssh/sshd_config.d/000-ci.conf
+          sudo launchctl load -w /System/Library/LaunchDaemons/ssh.plist 2>/dev/null || true
+          sudo launchctl kickstart -k system/com.openssh.sshd 2>/dev/null || true
+          sleep 2
+          nc -z localhost 22 && echo "sshd is listening"
+      - name: Tunnel and wait
+        env:
+          PORT: ${{ inputs.port }}
+          MINUTES: ${{ inputs.minutes }}
+        run: |
+          curl -sL https://github.com/ekzhang/bore/releases/download/v0.6.0/bore-v0.6.0-aarch64-apple-darwin.tar.gz | tar xz
+          ./bore local 22 --to bore.pub --port "$PORT" > bore.log 2>&1 &
+          sleep 5; cat bore.log
+          echo "ssh -p $PORT $USER@bore.pub"
+          end=$(( $(date +%s) + MINUTES * 60 ))
+          while [ "$(date +%s)" -lt "$end" ] && [ ! -f /tmp/stop ]; do sleep 10; done
+          echo "session over"
