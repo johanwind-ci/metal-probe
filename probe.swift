@@ -111,17 +111,18 @@ kernel void copy4(device const float4* src [[buffer(0)]], device float4* dst [[b
     dst[i] = src[i];
 }
 
-// 8 independent FMA chains per thread; 16 flops per iteration.
+// 8 independent float4 FMA chains per thread, unrolled 4x (loop overhead otherwise caps it at ~40% of peak);
+// 8 * 4 * 4 * 2 = 256 flops per iteration.
+#define FMA8 x0 = fma(x0, b, c); x1 = fma(x1, b, c); x2 = fma(x2, b, c); x3 = fma(x3, b, c); \
+             x4 = fma(x4, b, c); x5 = fma(x5, b, c); x6 = fma(x6, b, c); x7 = fma(x7, b, c);
 kernel void fma_loop(device float* out [[buffer(0)]], constant uint& iters [[buffer(1)]],
                      uint i [[thread_position_in_grid]]) {
-    const float b = 0.9999f, c = 0.0001f;
-    float x0 = float(i) * 1e-9f, x1 = x0 + 0.1f, x2 = x0 + 0.2f, x3 = x0 + 0.3f;
-    float x4 = x0 + 0.4f, x5 = x0 + 0.5f, x6 = x0 + 0.6f, x7 = x0 + 0.7f;
-    for (uint k = 0; k < iters; k++) {
-        x0 = fma(x0, b, c); x1 = fma(x1, b, c); x2 = fma(x2, b, c); x3 = fma(x3, b, c);
-        x4 = fma(x4, b, c); x5 = fma(x5, b, c); x6 = fma(x6, b, c); x7 = fma(x7, b, c);
-    }
-    out[i] = x0 + x1 + x2 + x3 + x4 + x5 + x6 + x7;
+    const float4 b = 0.9999f, c = 0.0001f;
+    float4 x0 = float(i) * 1e-9f + float4(0, 1, 2, 3) * 0.01f, x1 = x0 + 0.1f, x2 = x0 + 0.2f, x3 = x0 + 0.3f;
+    float4 x4 = x0 + 0.4f, x5 = x0 + 0.5f, x6 = x0 + 0.6f, x7 = x0 + 0.7f;
+    for (uint k = 0; k < iters; k++) { FMA8 FMA8 FMA8 FMA8 }
+    float4 s = x0 + x1 + x2 + x3 + x4 + x5 + x6 + x7;
+    out[i] = s.x + s.y + s.z + s.w;
 }
 
 // simdgroup_matrix 8x8 MMA throughput (the primitive metal-flash-attention etc. rely on).
@@ -234,7 +235,7 @@ if let lib = lib {
     log("\n== FP32 FMA throughput")
     if let p = pipeline(lib, "fma_loop") {
         let threads = 1 << 20
-        var iters: UInt32 = 4096
+        var iters: UInt32 = 256
         let out = device.makeBuffer(length: threads * 4, options: .storageModePrivate)!
         let r = timeGPU(5) { e in
             e.setComputePipelineState(p); e.setBuffer(out, offset: 0, index: 0)
@@ -244,7 +245,7 @@ if let lib = lib {
         }
         if let err = r.error { tests["fp32_fma"] = "FAILED: \(err)"; log("  FAILED: \(err)") }
         else {
-            let flops = Double(threads) * Double(iters) * 16
+            let flops = Double(threads) * Double(iters) * 256
             tests["fp32_fma_TFLOPS_gpu"] = flops / r.gpu / 1e12; tests["fp32_fma_TFLOPS_wall"] = flops / r.wall / 1e12
             log("  \(fmt(flops / r.gpu / 1e12)) TFLOPS (GPU timestamps), \(fmt(flops / r.wall / 1e12)) TFLOPS (wall)")
         }
