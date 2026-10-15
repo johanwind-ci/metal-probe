@@ -1,0 +1,43 @@
+name: metal-probe
+on:
+  workflow_dispatch:
+    inputs:
+      include_xlarge:
+        description: "Also run on the paid macos-latest-xlarge (M2, 8 GPU cores; billed per minute)"
+        type: boolean
+        default: false
+  push:
+    paths: [probe.swift, mps_check.py, .github/workflows/metal-probe.yml]
+
+jobs:
+  probe:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: ${{ fromJSON(inputs.include_xlarge && '["macos-latest","macos-latest-xlarge"]' || '["macos-latest"]') }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: System info
+        run: |
+          sw_vers
+          sysctl machdep.cpu.brand_string hw.model hw.ncpu hw.memsize kern.hv_vmm_present || true
+          system_profiler SPHardwareDataType SPDisplaysDataType
+      - name: Metal probe
+        run: |
+          swiftc -swift-version 5 -O probe.swift -o probe
+          ./probe | tee probe-${{ matrix.os }}.txt
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: PyTorch MPS check
+        continue-on-error: true
+        run: |
+          pip install --quiet torch
+          python mps_check.py | tee mps-${{ matrix.os }}.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: results-${{ matrix.os }}
+          path: "*.txt"
