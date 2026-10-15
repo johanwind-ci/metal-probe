@@ -1,20 +1,38 @@
 name: metal-probe
+# Only push and manual triggers: Blacksmith runners are org self-hosted runners, so never run fork PRs on them.
 on:
   workflow_dispatch:
     inputs:
+      include_m4:
+        description: "Also run on Blacksmith M4 (blacksmith-6vcpu-macos-latest; uses free-tier minutes at 20x)"
+        type: boolean
+        default: false
       include_xlarge:
-        description: "Also run on the paid macos-latest-xlarge (M2, 8 GPU cores; billed per minute)"
+        description: "Also run on the paid GitHub macos-latest-xlarge (M2, 8 GPU cores; billed per minute)"
         type: boolean
         default: false
   push:
     paths: [probe.swift, mps_check.py, .github/workflows/metal-probe.yml]
 
 jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.m.outputs.matrix }}
+    steps:
+      - id: m
+        run: |
+          os='"macos-latest"'
+          if [ "${{ inputs.include_m4 }}" = "true" ]; then os="$os,\"blacksmith-6vcpu-macos-latest\""; fi
+          if [ "${{ inputs.include_xlarge }}" = "true" ]; then os="$os,\"macos-latest-xlarge\""; fi
+          echo "matrix=[$os]" >> "$GITHUB_OUTPUT"
+
   probe:
+    needs: plan
     strategy:
       fail-fast: false
       matrix:
-        os: ${{ fromJSON(inputs.include_xlarge && '["macos-latest","macos-latest-xlarge"]' || '["macos-latest"]') }}
+        os: ${{ fromJSON(needs.plan.outputs.matrix) }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     steps:
