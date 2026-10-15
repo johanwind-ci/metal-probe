@@ -1,12 +1,26 @@
-# CircleCI M4 Pro probe. Gated behind a pipeline parameter so ordinary pushes don't spend
-# macOS credits (m4pro.medium = 200 credits/min; free plan = 30k credits/month).
-# Trigger: POST /api/v2/project/gh/johanwind-ci/metal-probe/pipeline {"parameters": {"run_probe": true}}
+# CircleCI M4 Pro (m4pro.medium = 200 credits/min; free plan = 30k credits/month).
+# Both workflows are gated behind pipeline parameters so ordinary pushes spend nothing.
+#   probe:   circleci run trigger --parameter run_probe=true
+#   session: circleci run trigger --parameter session=true --parameter pubkey="..." --parameter port=4xxxx
+#            (driven by ~/.agents/skills/metal-spot/metal.sh; see ci/session.sh)
 version: 2.1
 
 parameters:
   run_probe:
     type: boolean
     default: false
+  session:
+    type: boolean
+    default: false
+  pubkey:
+    type: string
+    default: ""
+  port:
+    type: integer
+    default: 0
+  minutes:
+    type: integer
+    default: 20
 
 jobs:
   probe:
@@ -37,8 +51,28 @@ jobs:
       - store_artifacts:
           path: mps.txt
 
+  session:
+    macos:
+      xcode: "26.6"
+    resource_class: m4pro.medium
+    environment:
+      PUBKEY: << pipeline.parameters.pubkey >>
+      PORT: << pipeline.parameters.port >>
+      MINUTES: << pipeline.parameters.minutes >>
+      SESSION_ID: << pipeline.id >>
+    steps:
+      - checkout
+      - run:
+          name: SSH session
+          no_output_timeout: 30m
+          command: bash ci/session.sh
+
 workflows:
   probe:
     when: << pipeline.parameters.run_probe >>
     jobs:
       - probe
+  session:
+    when: << pipeline.parameters.session >>
+    jobs:
+      - session
